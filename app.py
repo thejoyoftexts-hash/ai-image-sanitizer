@@ -2,7 +2,6 @@ import io
 import numpy as np
 import streamlit as st
 from PIL import Image, ImageFilter, ImageOps
-from scipy.ndimage import gaussian_filter, map_coordinates
 
 # =====================================================================
 # 1. ADVANCED IMAGE SANITIZATION FUNCTIONS
@@ -86,42 +85,32 @@ def apply_chromatic_aberration(img, shift_amount=1):
     return Image.fromarray(np.stack([r_shifted, g, b_shifted], axis=-1))
 
 
-def advanced_scramble(img, warp_sigma=2.0, warp_alpha=0.7):
-    """Applies a microscopic elastic distortion layer to bend and destroy
+def pure_numpy_scramble(img, warp_alpha=0.8):
+    """Applies an optimized micro-distortion map using pure NumPy to break
 
-    the uniform mathematical pixel grids created by upscaling networks.
+    AI grid layouts without relying on scipy's interpolation modules.
     """
     img_array = np.array(img)
-    shape = img_array.shape
+    h, w, c = img_array.shape
 
-    dx = (
-        gaussian_filter((np.random.rand(*shape[:2]) * 2 - 1), warp_sigma)
-        * warp_alpha
-    )
-    dy = (
-        gaussian_filter((np.random.rand(*shape[:2]) * 2 - 1), warp_sigma)
-        * warp_alpha
-    )
+    # Construct standard pixel coordinates
+    y, x = np.indices((h, w))
 
-    x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
+    # Compute a wave-style structural distortion map
+    dx = (np.sin(x / 4.0) + np.cos(y / 4.0)) * warp_alpha
+    dy = (np.cos(x / 4.0) + np.sin(y / 4.0)) * warp_alpha
 
-    scrambled_array = np.zeros_like(img_array)
-    for i in range(shape[2]):
-        channel_indices = (
-            np.reshape(y + dy, (-1, 1)),
-            np.reshape(x + dx, (-1, 1)),
-            np.full((shape[0] * shape[1], 1), i),
-        )
-        scrambled_array[..., i] = map_coordinates(
-            img_array, channel_indices, order=1
-        ).reshape(shape[:2])
+    # Clip coordinates to prevent index out of bounds exceptions
+    map_x = np.clip(x + dx, 0, w - 1).astype(np.int32)
+    map_y = np.clip(y + dy, 0, h - 1).astype(np.int32)
 
-    return Image.fromarray(scrambled_array.astype(np.uint8))
+    # Remap pixel vectors using advanced NumPy indexing
+    scrambled_array = img_array[map_y, map_x]
+    return Image.fromarray(scrambled_array)
 
 
 def execution_pipeline(img_input, noise_level=0.02, quality=80):
     """The master pipeline combining text protection with deep texture destruction."""
-    # Ensure safe conversion to pure RGB format
     if img_input.mode in ("RGBA", "LA") or (
         img_input.mode == "P" and "transparency" in img_input.info
     ):
@@ -136,14 +125,12 @@ def execution_pipeline(img_input, noise_level=0.02, quality=80):
     # Generate the layout preservation mask
     text_mask = create_edge_mask(original_img)
 
-    # Phase 1: Attack background textures using Fourier and elastic warps
+    # Phase 1: Attack background textures using Fourier and pure numpy warps
     processed_bg = original_img.copy()
     processed_bg = fourier_texture_scramble(
         processed_bg, magnitude_scramble=0.07
     )
-    processed_bg = advanced_scramble(
-        processed_bg, warp_sigma=2.5, warp_alpha=0.8
-    )
+    processed_bg = pure_numpy_scramble(processed_bg, warp_alpha=0.8)
     processed_bg = processed_bg.filter(ImageFilter.GaussianBlur(radius=0.5))
 
     # Downsample and rebuild background to degrade mathematical structures
